@@ -1,22 +1,93 @@
 ---
 title: "Predicting how well athletes are performing bicep curls"
 author: "James Capstick"
-date: "28 February 2016"
+date: "26 February 2016"
 output: html_document
 ---
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+# Overview
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, my goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset). 
 
-```{r}
-summary(cars)
+# Data
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+The motion of these participants was then measured using four inertial measurement units, each providing acceleration, gyroscope and magnetometer data at a sampling rate of 45Hz. The sensors were mounted in the users' glove, armband, lumbar belt and dumbbell.
+
+```{r downloadData, cache=TRUE}
+##read in the data
+rawTraining <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"))
+rawTesting <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"))
 ```
 
-You can also embed plots, for example:
+The raw data provides aggregated calculations of data at certain points during the time series, like the average, kurtosis, skewness etc. These are poorly calculated and/or filled in, so for the purposes of this project they will be ignored.
 
-```{r, echo=FALSE}
-plot(cars)
+```{r cleanData, cache=TRUE}
+##remove unhelpful columns
+##these appear to have been calculated at the end of every cycle (where new_window=="Yes") but they've been calculated and/or labelled poorly so I'm going to remove them
+rawCols <- names(rawTraining)
+badCols <- grep("kurtosis_|skewness_|max_|min_|amplitude_|var_|stddev_|avg_", rawCols)
+processedTraining <- rawTraining[,-badCols]
+processedTesting <- rawTesting[,-badCols]
+
+##set the outcome to be a factor
+processedTraining$classe <- as.factor(processedTraining$classe)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+# Model creation
+
+What we're trying to predict here is the type of curl the participant is doing from the data we have. After splitting our training set into three for training, test and validation, we will try some different methods of modelling the data. Since our outcome is a factor variable rather than a number, linear regression won't be of much use to us, so we'll try trees, boosting and random forests. If necessary, once we have evaluated these options we can combine them into our final model.
+For our resampling methods, I will choose standard bootstrapping because there are a large number of observations, making it less likely that there will be problems with resampling the same observations more than once.
+Once we have created our models using the training set, we will evaluate each model with the test set to estimate the accuracy of the models. The final estimate of out-of-sample error will be made on the validation set.
+
+```{r createDataSets, cache=TRUE}
+##split into validation, training and test sets
+suppressPackageStartupMessages(library(caret))
+set.seed(54321)
+inBuild <- createDataPartition(processedTraining$classe,p=0.7,list=FALSE)
+validation <- processedTraining[-inBuild,]
+buildData <- processedTraining[inBuild,]
+inTrain <- createDataPartition(buildData$classe,p=0.7,list=FALSE)
+training <- buildData[inTrain,]
+testing <- buildData[-inTrain,]
+```
+
+First, we'll try using trees to predict the class of each reading.
+```{r treees, cache=TRUE, message=FALSE, warning=FALSE}
+##create a model using trees
+set.seed(12345)
+rpartMod <- train(classe~.,data=training, method="rpart")
+rpartPred <- predict(rpartMod,testing)
+rpartTable <- table(rpartPred,testing$classe)
+confusionMatrix(rpartTable)
+```
+
+Now the boosting method. 
+```{r boosting, cache=TRUE, message=FALSE, warning=FALSE}
+##create a model using gbm
+set.seed(12345)
+gbmMod <- train(classe~.,data=training, method="gbm", verbose=FALSE)
+gbmPred <- predict(gbmMod,testing)
+gbmTable <- table(gbmPred,testing$classe)
+confusionMatrix(gbmTable)
+```
+
+Finally, we'll try random forests.
+```{r randomForests, cache=TRUE, message=FALSE, warning=FALSE}
+##create a model using random forests
+set.seed(12345)
+rfMod <- train(classe~., data=training, method="rf")
+rfPred <- predict(rfMod,testing)
+rfTable <- table(rfPred,testing$classe)
+confusionMatrix(rfTable)
+```
+
+Looking at the accuracy of these three models, an accuracy of 0.9995 for random forests suggests that that is the model we should use. Now to calculate the expected out of sample error we will use our validation set.
+```{r outOfSampleError, cache=TRUE, message=FALSE, warning=FALSE}
+rfValidationPred <- predict(rfMod,validation)
+rfValidationTable <- table(rfValidationPred,validation$classe)
+confusionMatrix(rfValidationTable)
+```
+
+So our expected out-of-sample accuracy is estimated to be 0.9997 - actually slightly better than the in-sample error, and our out-of-sample error rate is therefore 0.03%. This should be easily good enough to accurately predict the activity types on the given test set of data.
